@@ -23,7 +23,7 @@ Applications are listed under the `applications` object.
 Each application object must be given a path to their executable, and a list of monitors
 (the _request mappers_). Each monitor is described by an event name, which is the name of
 an application function one's which to monitor. the `in_fn_name` takes the name of the eBPF
-code that performs the mapping. An accompanying `ret_fn_name` take sthe name of the eBPF code
+code that performs the mapping. An accompanying `ret_fn_name` takes the name of the eBPF code
 that undo the mapping when the function returns.
 In general, the format of request mappers is always the same, but as they might use different
 cues from the application to use the mapping, multiple can be declared for the various traced

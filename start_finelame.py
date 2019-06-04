@@ -12,7 +12,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from finelame import Finelame
+    from engine.finelame import Finelame
 
     FL = Finelame(cfg_file=args.config_file,
                   run_label=args.run_label,
