@@ -1,0 +1,124 @@
+model_params:
+    k: 3
+    features:
+        - 'REQ_CPUTIME'
+        - 'REQ_MEM_MALLOC'
+        - 'REQ_PGFLT'
+        - 'REQ_IDLE_TIME'
+        - 'REQ_TCP_SENT'
+        - 'REQ_TCP_RCVD'
+
+request_stats:
+    REQ_CPUTIME:
+        datapoint: 'cputime'
+    REQ_PGFLT:
+        datapoint: 'pgfaults'
+    REQ_MEM_MALLOC:
+        datapoint: 'mem_malloc'
+    REQ_TCP_SENT:
+        datapoint: 'tcp_sent'
+    REQ_TCP_RCVD:
+        datapoint: 'tcp_rcvd'
+    REQ_IDLE_TIME:
+        datapoint: 'tcp_idle_time'
+    origin_ip:
+        datapoint: 'saddr'
+    origin_ts:
+        datapoint: 'first_ts'
+    completion_ts:
+        datapoint: 'latest_ts_update'
+
+# Defining this monitor separately because it only applies to a single application
+# (optional)
+httpd_malloc_monitor: &HTTPD_MALLOC
+    event: 'apr_palloc'
+    exec_path: '/home/maxdml/bin/httpd'
+    in_fn_name: 'ap_probe_malloc'
+    type: 'p'
+    side: 'u'
+
+resource_monitors:
+    - event: 'finish_task_switch'
+      in_fn_name: 'sched_switch'
+      type: 'p'
+      side: 'k'
+
+    - event: 'exceptions:page_fault_user'
+      in_fn_name: 'handle_pg_fault'
+      type: 't'
+      side: 'k'
+
+    - event: 'tcp_sendmsg'
+      in_fn_name: 'probe_tcp_sendmsg'
+      type: 'p'
+      side: 'k'
+
+    - event: 'tcp_cleanup_rbuf'
+      in_fn_name: 'probe_tcp_cleanup_rbuf'
+      type: 'p'
+      side: 'k'
+
+    - event: 'malloc'
+      exec_path: '/lib/x86_64-linux-gnu/libc.so.6'
+      in_fn_name: 'probe_malloc'
+      type: 'p'
+      side: 'u'
+
+# Uncomment this next line to enable httpd monitoring
+#    - *HTTPD_MALLOC
+
+ebpf_prog: 'engine/ebpf_progs/finelame_ebpf.c'
+
+# Description of the DEDOS application and monitors
+# (Optional)
+dedos_application: &DEDOS_APP
+    exec_path: '/home/maxdml/nfs/maxdml/Dedos/rt'
+    monitors:
+        - event: 'msu_receive'
+          in_fn_name: 'map_tid_to_rid'
+          ret_fn_name: 'unmap_tid_to_rid'
+
+# Description of HTTPD application and monitors (for apache)
+# (optional)
+httpd_application: &HTTPD_APP
+    exec_path: '/home/maxdml/httpd_orig/httpd'
+    monitors:
+        - event: 'core_create_conn'
+          ret_fn_name: 'ap_map_conn_to_rid'
+        - event: 'ap_process_http_sync_connection'
+          in_fn_name: 'ap_map_tid_to_rid'
+          ret_fn_name: 'ap_unmap_tid_to_rid'
+        - event: 'ap_process_http_async_connection'
+          in_fn_name: 'ap_map_tid_to_rid'
+          ret_fn_name: 'ap_unmap_tid_to_rid'
+
+# Description of NODEJS application and monitors
+# (optional)
+nodejs_application: &NODEJS_APP
+    exec_path: '/home/maxdml/node/node'
+    monitors:
+      - event: 'uv_accept'
+        in_fn_name: 'new_assoc_2'
+      - event: 'uv__read'
+        in_fn_name: 'map_tid_to_rid_1'
+        ret_fn_name: 'unmap_tid_to_rid'
+      - event: 'uv__work_submit'
+        in_fn_name: 'start_assoc_2'
+      - event: 'uv__fs_work'
+        in_fn_name: 'map_tid_to_rid_1'
+      - event: 'uv_async_send'
+        in_fn_name: 'unmap_tid_to_rid'
+      - event: 'uv__fs_done'
+        in_fn_name: 'map_tid_to_rid_1'
+        ret_fn_name: 'unmap_tid_to_rid'
+      - event: 'uv__write'
+        in_fn_name: 'map_tid_to_rid_1'
+        ret_fn_name: 'unmap_tid_to_rid'
+
+# include the applications here which you wish to monitor
+applications:
+#    - *DEDOS_APP
+    - *NODEJS_APP
+
+
+train_time: 200
