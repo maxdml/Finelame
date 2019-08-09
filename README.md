@@ -71,8 +71,6 @@ In addition, the agent create files for various informative parameters, includin
 and the `normalization_[label].csv` file which holds the mean and standard deviation for each of the
 features.
 
-This repository provides a python notebook (name here) that can be used to parse the files and plot Finelame's monitoring data.
-
 # Creating new request-mappers
 - Identify the key functions that process requests in your software
 - If this function takes a request ID as a parameter, and that request ID is consistent through execution on the program, use it for a direct mapping with tid
