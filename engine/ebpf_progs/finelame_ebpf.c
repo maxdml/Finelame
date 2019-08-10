@@ -70,12 +70,12 @@ struct outlier_score {
     u64 detection_cputime;
 };
 
-BPF_ARRAY(max_rid, int, 1);
-BPF_HASH(assoc_to_rid, unsigned long, int, MAX_DATAPOINTS);
-BPF_HASH(tid_to_rid, u32, int);
+BPF_ARRAY(max_rid, $RID_TYPE, 1);
+BPF_HASH(assoc_to_rid, unsigned long, $RID_TYPE, MAX_DATAPOINTS);
+BPF_HASH(tid_to_rid, u32, $RID_TYPE);
 BPF_HASH(start, u32, u64);
-BPF_HASH(datapoints, int, struct datapoint, MAX_DATAPOINTS);
-BPF_HASH(outlier_scores_m, int, struct outlier_score, MAX_DATAPOINTS);
+BPF_HASH(datapoints, $RID_TYPE, struct datapoint, MAX_DATAPOINTS);
+BPF_HASH(outlier_scores_m, $RID_TYPE, struct outlier_score, MAX_DATAPOINTS);
 
 /** Model params */
 BPF_ARRAY(cluster_thresholds, u64, K);
@@ -126,7 +126,7 @@ static inline int centroids_defined() {
     return k0_l1 && *k0_l1;
 }
 
-static inline int update_outlier_score(struct pt_regs *ctx, int req_id, long long delta, u64 ts, u64 cputime) {
+static inline int update_outlier_score(struct pt_regs *ctx, $RID_TYPE req_id, long long delta, u64 ts, u64 cputime) {
     //$DEBUG_PRINTK("Delta is %lld\n", delta);
     struct outlier_score *out = outlier_scores_m.lookup(&req_id);
     if (!out) {
@@ -173,12 +173,12 @@ static inline int update_outlier_score(struct pt_regs *ctx, int req_id, long lon
                     is_outlier = 0;
                 }
                 $DEBUG_PRINTK("Distance to %d(%lld) is: %lld\n", idx, *threshold, min_dist);
-                $DEBUG_PRINTK("[%d] is outlier? %d.\n", req_id, is_outlier);
+                $DEBUG_PRINTK("[%$REQ_TYPE_FORMAT] is outlier? %d.\n", req_id, is_outlier);
             }
         }
     }
 
-    $DEBUG_PRINTK("[%d] final decision: %d\n", req_id, is_outlier);
+    $DEBUG_PRINTK("[%$REQ_TYPE_FORMAT] final decision: %d\n", req_id, is_outlier);
 
     out->is_outlier = is_outlier;
 
@@ -192,7 +192,7 @@ static inline int update_outlier_score(struct pt_regs *ctx, int req_id, long lon
     return 0;
 }
 
-static struct datapoint * lookup_or_init_dp(int req_id, u64 ts) {
+static struct datapoint * lookup_or_init_dp($RID_TYPE req_id, u64 ts) {
     struct datapoint *dp = datapoints.lookup(&req_id);
     if (dp) {
         dp->latest_ts_update = ts;
@@ -204,7 +204,7 @@ static struct datapoint * lookup_or_init_dp(int req_id, u64 ts) {
     return datapoints.lookup_or_init(&req_id, &new_dp);
 }
 
-static inline int update_array(struct pt_regs *ctx, u32 pid, u64 ts, int req_id) {
+static inline int update_array(struct pt_regs *ctx, u32 pid, u64 ts, $RID_TYPE req_id) {
     u64 *tsp = start.lookup(&pid);
     if (tsp == 0) {
         return -1;
@@ -225,7 +225,7 @@ static inline int update_array(struct pt_regs *ctx, u32 pid, u64 ts, int req_id)
     lock_xadd(&dp->n_cputime_updates, 1);
     lock_xadd(&dp->cputime, delta);
 
-    $DEBUG_PRINTK("RID [%d]: CPUTIME: %lld\n", req_id, dp->cputime);
+    $DEBUG_PRINTK("RID [%$REQ_TYPE_FORMAT]: CPUTIME: %lld\n", req_id, dp->cputime);
     if (centroids_defined()) {
         long long delta_scaled = normalize_datapoint(delta, CPUTIME_OFFSET);
         update_outlier_score(ctx, req_id, delta_scaled, ts, dp->cputime);
@@ -235,7 +235,7 @@ static inline int update_array(struct pt_regs *ctx, u32 pid, u64 ts, int req_id)
 
 int update_cputime(struct pt_regs *ctx) {
     u32 pid = bpf_get_current_pid_tgid();
-    int *req_id = tid_to_rid.lookup(&pid);
+    $RID_TYPE *req_id = tid_to_rid.lookup(&pid);
     if (!req_id) {
         return 0;
     }
@@ -248,13 +248,13 @@ int update_cputime(struct pt_regs *ctx) {
 int sched_switch(struct pt_regs *ctx, struct task_struct *prev) {
     //PID is stored in the first 32 LS bytes. (TGID are the next 32 bytes)
     u32 prev_pid = prev->pid;
-    int *prev_req_id = tid_to_rid.lookup(&prev_pid);
+    $RID_TYPE *prev_req_id = tid_to_rid.lookup(&prev_pid);
     if (prev_req_id) {
         u64 ts = bpf_ktime_get_ns();
         update_array(ctx, prev_pid, ts, *prev_req_id);
     }
     u32 pid = bpf_get_current_pid_tgid();
-    int *req_id = tid_to_rid.lookup(&pid);
+    $RID_TYPE *req_id = tid_to_rid.lookup(&pid);
     if (req_id) {
         u64 ts = bpf_ktime_get_ns();
         start.update(&pid, &ts);
@@ -264,7 +264,7 @@ int sched_switch(struct pt_regs *ctx, struct task_struct *prev) {
 
 int handle_pg_fault(struct pt_regs *ctx) {
     u32 pid = bpf_get_current_pid_tgid();
-    int *req_id = tid_to_rid.lookup(&pid);
+    $RID_TYPE *req_id = tid_to_rid.lookup(&pid);
 
     if (!req_id) {
         return 0;
@@ -278,7 +278,7 @@ int handle_pg_fault(struct pt_regs *ctx) {
     }
     dp->pgfaults++;
 
-    $DEBUG_PRINTK("RID: [%d] PGFAULTS: %d\n", *req_id, dp->pgfaults);
+    $DEBUG_PRINTK("RID: [%$REQ_TYPE_FORMAT] PGFAULTS: %d\n", *req_id, dp->pgfaults);
     if (centroids_defined()) {
         long long delta = normalize_datapoint(1, PGFAULT_OFFSET);
         update_outlier_score(ctx, *req_id, delta, ts, dp->cputime);
@@ -289,12 +289,12 @@ int handle_pg_fault(struct pt_regs *ctx) {
 
 int ap_probe_malloc(struct pt_regs *ctx) {
     u32 pid = bpf_get_current_pid_tgid();
-    int *req_id_p = tid_to_rid.lookup(&pid);
+    $RID_TYPE *req_id_p = tid_to_rid.lookup(&pid);
 
     if (!req_id_p) {
         return 0;
     }
-    int req_id = *req_id_p;
+    $RID_TYPE req_id = *req_id_p;
 
     size_t malloc_size;
     bpf_probe_read(&malloc_size, sizeof(malloc_size), (void*)&PT_REGS_PARM1(ctx));
@@ -305,7 +305,7 @@ int ap_probe_malloc(struct pt_regs *ctx) {
     }
     dp->mem_malloc += malloc_size;
 
-    $DEBUG_PRINTK("RID: [%d] MALLOC: %d\n", req_id, dp->mem_malloc);
+    $DEBUG_PRINTK("RID: [%$REQ_TYPE_FORMAT] MALLOC: %d\n", req_id, dp->mem_malloc);
     if (centroids_defined()) {
         long long delta = normalize_datapoint(malloc_size, MALLOC_OFFSET);
         update_outlier_score(ctx, req_id, delta, ts, dp->cputime);
@@ -315,7 +315,7 @@ int ap_probe_malloc(struct pt_regs *ctx) {
 
 int probe_realloc(struct pt_regs *ctx) {
     u32 pid = bpf_get_current_pid_tgid();
-    int *req_id = tid_to_rid.lookup(&pid);
+    $RID_TYPE *req_id = tid_to_rid.lookup(&pid);
 
     if (!req_id) {
         return 0;
@@ -330,7 +330,7 @@ int probe_realloc(struct pt_regs *ctx) {
     }
     dp->mem_malloc += malloc_size;
 
-    $DEBUG_PRINTK("RID: [%d] MEM_MALLOC: %d\n", *req_id, dp->mem_malloc);
+    $DEBUG_PRINTK("RID: [%$REQ_TYPE_FORMAT] MEM_MALLOC: %d\n", *req_id, dp->mem_malloc);
     if (centroids_defined()) {
         long long delta = normalize_datapoint(malloc_size, MALLOC_OFFSET);
         update_outlier_score(ctx, *req_id, delta, ts, dp->cputime);
@@ -338,10 +338,9 @@ int probe_realloc(struct pt_regs *ctx) {
     return 0;
 };
 
-
 int probe_malloc(struct pt_regs *ctx) {
     u32 pid = bpf_get_current_pid_tgid();
-    int *req_id = tid_to_rid.lookup(&pid);
+    $RID_TYPE *req_id = tid_to_rid.lookup(&pid);
 
     if (!req_id) {
         return 0;
@@ -356,7 +355,7 @@ int probe_malloc(struct pt_regs *ctx) {
     }
     dp->mem_malloc += malloc_size;
 
-    $DEBUG_PRINTK("RID: [%d] MEM_MALLOC: %d\n", *req_id, dp->mem_malloc);
+    $DEBUG_PRINTK("RID: [%$REQ_TYPE_FORMAT] MEM_MALLOC: %d\n", *req_id, dp->mem_malloc);
     if (centroids_defined()) {
         long long delta = normalize_datapoint(malloc_size, MALLOC_OFFSET);
         update_outlier_score(ctx, *req_id, delta, ts, dp->cputime);
@@ -366,12 +365,12 @@ int probe_malloc(struct pt_regs *ctx) {
 
 int probe_tcp_sendmsg(struct pt_regs *ctx, struct sock *sk, struct msghdr *hdr, size_t size) {
     u32 pid = bpf_get_current_pid_tgid();
-    int *req_id_p = tid_to_rid.lookup(&pid);
+    $RID_TYPE *req_id_p = tid_to_rid.lookup(&pid);
 
     if (!req_id_p) {
         return 0;
     }
-    int req_id = *req_id_p;
+    $RID_TYPE req_id = *req_id_p;
 
     u64 ts = bpf_ktime_get_ns();
 
@@ -381,7 +380,7 @@ int probe_tcp_sendmsg(struct pt_regs *ctx, struct sock *sk, struct msghdr *hdr, 
     }
     dp->tcp_sent += size;
 
-    $DEBUG_PRINTK("RID: [%d] MEM_MALLOC: %d\n", req_id, dp->tcp_sent);
+    $DEBUG_PRINTK("RID: [%$REQ_TYPE_FORMAT] MEM_MALLOC: %d\n", req_id, dp->tcp_sent);
     if (centroids_defined()) {
         long long delta = normalize_datapoint(size, TCP_SENT_OFFSET);
         update_outlier_score(ctx, req_id, delta, ts, dp->cputime);
@@ -395,7 +394,7 @@ int probe_tcp_cleanup_rbuf(struct pt_regs *ctx, struct sock *sk, int copied) {
         return -1;
     }
     u32 pid = bpf_get_current_pid_tgid();
-    int *req_id = tid_to_rid.lookup(&pid);
+    $RID_TYPE *req_id = tid_to_rid.lookup(&pid);
     if (!req_id) {
         return 0;
     }
@@ -417,9 +416,9 @@ int probe_tcp_cleanup_rbuf(struct pt_regs *ctx, struct sock *sk, int copied) {
         dp->saddr = sk->__sk_common.skc_daddr;
     }
 
-    $DEBUG_PRINTK("RID [%d] SADDR: %d\n", *req_id, dp->saddr);
-    $DEBUG_PRINTK("RID [%d] TCP_RCV: %d\n", *req_id, dp->tcp_rcvd);
-    $DEBUG_PRINTK("RID [%d] TCP_IDLE_TIME: %lld\n", *req_id, dp->tcp_idle_time);
+    $DEBUG_PRINTK("RID [%$REQ_TYPE_FORMAT] SADDR: %d\n", *req_id, dp->saddr);
+    $DEBUG_PRINTK("RID [%$REQ_TYPE_FORMAT] TCP_RCV: %d\n", *req_id, dp->tcp_rcvd);
+    $DEBUG_PRINTK("RID [%$REQ_TYPE_FORMAT] TCP_IDLE_TIME: %lld\n", *req_id, dp->tcp_idle_time);
     if (centroids_defined()) {
         if (idle_time) {
             //FIXME: There is an overflow problem that should disappear when we move
@@ -449,19 +448,19 @@ void new_assoc_2(struct pt_regs *ctx) {
     }
     //u64 ts = bpf_ktime_get_ns();
 
-    int idx = 0;
-    int *prev_rid = max_rid.lookup(&idx);
+    u32 idx = 0;
+    $RID_TYPE *prev_rid = max_rid.lookup(&idx);
     if (prev_rid == NULL) {
         return;
     }
     (*prev_rid) += 1;
-    int next_rid = *prev_rid;
+    $RID_TYPE next_rid = *prev_rid;
 
     lookup_or_init_dp(next_rid, ts);
     assoc_to_rid.update(&assoc, &next_rid);
 
     $DEBUG_PRINTK("=======================================================\n");
-    $DEBUG_PRINTK("Associated [%lu] to req [%d].\n", assoc, next_rid);
+    $DEBUG_PRINTK("Associated [%lu] to req [%$REQ_TYPE_FORMAT].\n", assoc, next_rid);
     $DEBUG_PRINTK("=======================================================\n");
     //struct datapoint dp = {.first_ts = ts, .last_tcp_rcv_ts = ts};
     //datapoints.insert(&next_rid, &dp);
@@ -470,7 +469,7 @@ void new_assoc_2(struct pt_regs *ctx) {
 void start_assoc_1(struct pt_regs *ctx) {
     u64 ts = bpf_ktime_get_ns();
     u32 pid = bpf_get_current_pid_tgid();
-    int *req_id_p = tid_to_rid.lookup(&pid);
+    $RID_TYPE *req_id_p = tid_to_rid.lookup(&pid);
     if (!req_id_p) {
         $DEBUG_PRINTK("=======================================================\n");
         $DEBUG_PRINTK("No association for pid [%d].\n", pid);
@@ -484,19 +483,19 @@ void start_assoc_1(struct pt_regs *ctx) {
         return;
     }
 
-    int req_id = *req_id_p;
+    $RID_TYPE req_id = *req_id_p;
     lookup_or_init_dp(req_id, ts);
     assoc_to_rid.update(&assoc, &req_id);
 
     $DEBUG_PRINTK("=======================================================\n");
-    $DEBUG_PRINTK("Associated [%lu] to req [%d]..\n", assoc, req_id);
+    $DEBUG_PRINTK("Associated [%lu] to req [%$REQ_TYPE_FORMAT]..\n", assoc, req_id);
     $DEBUG_PRINTK("=======================================================\n");
 }
 
 void start_assoc_1_and_unmap(struct pt_regs *ctx) {
 
     u32 pid = bpf_get_current_pid_tgid();
-    int *req_id_p = tid_to_rid.lookup(&pid);
+    $RID_TYPE *req_id_p = tid_to_rid.lookup(&pid);
     if (!req_id_p) {
         $DEBUG_PRINTK("=======================================================\n");
         $DEBUG_PRINTK("No association for pid [%d].\n", pid);
@@ -511,25 +510,25 @@ void start_assoc_1_and_unmap(struct pt_regs *ctx) {
     }
     u64 ts = bpf_ktime_get_ns();
 
-    int req_id = *req_id_p;
+    $RID_TYPE req_id = *req_id_p;
     lookup_or_init_dp(req_id, ts);
     assoc_to_rid.update(&assoc, &req_id);
 
     $DEBUG_PRINTK("=======================================================\n");
-    $DEBUG_PRINTK("Associated [%lu] to req [%d]..\n", assoc, req_id);
+    $DEBUG_PRINTK("Associated [%lu] to req [%$REQ_TYPE_FORMAT]..\n", assoc, req_id);
     $DEBUG_PRINTK("=======================================================\n");
 
     update_array(ctx, pid, ts, req_id);
     tid_to_rid.delete(&pid);
 
     $DEBUG_PRINTK("=======================================================\n");
-    $DEBUG_PRINTK("Unmapped tid [%d] from req [%d] assoc [%lu]\n", pid, req_id);
+    $DEBUG_PRINTK("Unmapped tid [%d] from req [%$REQ_TYPE_FORMAT] assoc [%lu]\n", pid, req_id);
     $DEBUG_PRINTK("=======================================================\n");
 }
 
 void start_assoc_2(struct pt_regs *ctx) {
     u32 pid = bpf_get_current_pid_tgid();
-    int *req_id_p = tid_to_rid.lookup(&pid);
+    $RID_TYPE *req_id_p = tid_to_rid.lookup(&pid);
     if (!req_id_p) {
         return;
     }
@@ -542,12 +541,12 @@ void start_assoc_2(struct pt_regs *ctx) {
         return;
     }
 
-    int req_id = *req_id_p;
+    $RID_TYPE req_id = *req_id_p;
     lookup_or_init_dp(req_id, ts);
     assoc_to_rid.update(&assoc, &req_id);
 
     $DEBUG_PRINTK("=======================================================\n");
-    $DEBUG_PRINTK("Associated [%lu] to req [%d]...\n", assoc, req_id);
+    $DEBUG_PRINTK("Associated [%lu] to req [%$REQ_TYPE_FORMAT]...\n", assoc, req_id);
     $DEBUG_PRINTK("=======================================================\n");
 }
 
@@ -557,7 +556,7 @@ void map_tid_to_rid_3(struct pt_regs *ctx) {
     if (assoc == 0) {
         return;
     }
-    int *req_id_p = assoc_to_rid.lookup(&assoc);
+    $RID_TYPE *req_id_p = assoc_to_rid.lookup(&assoc);
     if (req_id_p == NULL) {
         $DEBUG_PRINTK("=======================================================\n");
         $DEBUG_PRINTK("No mapping for assoc %lu\n", assoc);
@@ -575,12 +574,12 @@ void map_tid_to_rid_3(struct pt_regs *ctx) {
     }
 
 
-    int req_id = *req_id_p;
+    $RID_TYPE req_id = *req_id_p;
     tid_to_rid.insert(&pid, &req_id);
     u64 ts = bpf_ktime_get_ns();
     start.update(&pid, &ts);
     $DEBUG_PRINTK("=======================================================\n");
-    $DEBUG_PRINTK("Mapped tid [%d] to req [%d] assoc [%lu]\n", pid, req_id, assoc);
+    $DEBUG_PRINTK("Mapped tid [%d] to req [%$REQ_TYPE_FORMAT] assoc [%lu]\n", pid, req_id, assoc);
     $DEBUG_PRINTK("=======================================================\n");
 }
 
@@ -590,7 +589,7 @@ void map_tid_to_rid_1(struct pt_regs *ctx) {
     if (assoc == 0) {
         return;
     }
-    int *req_id_p = assoc_to_rid.lookup(&assoc);
+    $RID_TYPE *req_id_p = assoc_to_rid.lookup(&assoc);
     if (req_id_p == NULL) {
         $DEBUG_PRINTK("=======================================================\n");
         $DEBUG_PRINTK("No mapping for assoc %lu\n", assoc);
@@ -608,12 +607,12 @@ void map_tid_to_rid_1(struct pt_regs *ctx) {
     }
 
 
-    int req_id = *req_id_p;
+    $RID_TYPE req_id = *req_id_p;
     tid_to_rid.insert(&pid, &req_id);
     u64 ts = bpf_ktime_get_ns();
     start.update(&pid, &ts);
     $DEBUG_PRINTK("=======================================================\n");
-    $DEBUG_PRINTK("Mapped tid [%d] to req [%d] assoc [%lu]\n", pid, req_id, assoc);
+    $DEBUG_PRINTK("Mapped tid [%d] to req [%$REQ_TYPE_FORMAT] assoc [%lu]\n", pid, req_id, assoc);
     $DEBUG_PRINTK("=======================================================\n");
 }
 
@@ -626,17 +625,17 @@ void ap_map_conn_to_rid(struct pt_regs *ctx) {
     }
     //u64 ts = bpf_ktime_get_ns();
 
-    int idx = 0;
-    int *prev_rid = max_rid.lookup(&idx);
+    u32 idx = 0;
+    $RID_TYPE *prev_rid = max_rid.lookup(&idx);
     if (prev_rid == NULL) {
         return;
     }
     (*prev_rid) += 1;
-    int next_rid = *prev_rid;
+    $RID_TYPE next_rid = *prev_rid;
 
     assoc_to_rid.update(&conn, &next_rid);
     $DEBUG_PRINTK("=======================================================\n");
-    $DEBUG_PRINTK("Mapped conn [%lu] to req [%d]\n", conn, next_rid);
+    $DEBUG_PRINTK("Mapped conn [%lu] to req [%$REQ_TYPE_FORMAT]\n", conn, next_rid);
     $DEBUG_PRINTK("=======================================================\n");
 
     //struct datapoint dp = {.first_ts = ts, .last_tcp_rcv_ts = ts};
@@ -653,7 +652,7 @@ void ap_map_tid_to_rid(struct pt_regs *ctx) {
         return;
     }
 
-    int *req_id_p = assoc_to_rid.lookup(&conn);
+    $RID_TYPE *req_id_p = assoc_to_rid.lookup(&conn);
     if (req_id_p == NULL) {
         $DEBUG_PRINTK("=======================================================\n");
         $DEBUG_PRINTK("no rid mapped to conn [%lu]\n", conn);
@@ -661,19 +660,19 @@ void ap_map_tid_to_rid(struct pt_regs *ctx) {
         return;
     }
     u32 pid = bpf_get_current_pid_tgid();
-    int req_id = *req_id_p;
+    $RID_TYPE req_id = *req_id_p;
     tid_to_rid.insert(&pid, &req_id);
     u64 ts = bpf_ktime_get_ns();
     start.update(&pid, &ts);
     $DEBUG_PRINTK("=======================================================\n");
-    $DEBUG_PRINTK("Mapped tid [%d] to req [%d]\n", pid, req_id);
+    $DEBUG_PRINTK("Mapped tid [%d] to req [%$REQ_TYPE_FORMAT]\n", pid, req_id);
     $DEBUG_PRINTK("=======================================================\n");
 }
 
 void ap_unmap_tid_to_rid(struct pt_regs *ctx) {
     u64 ts = bpf_ktime_get_ns();
     u32 pid = bpf_get_current_pid_tgid();
-    int *req_id = tid_to_rid.lookup(&pid);
+    $RID_TYPE *req_id = tid_to_rid.lookup(&pid);
     if (!req_id) {
         return;
     }
@@ -688,12 +687,12 @@ void ap_unmap_tid_to_rid(struct pt_regs *ctx) {
     }*/
 
     $DEBUG_PRINTK("=======================================================\n");
-    $DEBUG_PRINTK("Unmapped tid [%d] from req [%d]\n", pid, *req_id);
+    $DEBUG_PRINTK("Unmapped tid [%d] from req [%$REQ_TYPE_FORMAT]\n", pid, *req_id);
     $DEBUG_PRINTK("=======================================================\n");
 }
 
 void map_tid_to_rid(struct pt_regs *ctx) {
-    int req_id;
+    $RID_TYPE req_id;
     bpf_probe_read(&req_id, sizeof(req_id), (void *)&PT_REGS_PARM3(ctx));
     if (req_id == 0) {
         return;
@@ -704,14 +703,14 @@ void map_tid_to_rid(struct pt_regs *ctx) {
     u64 ts = bpf_ktime_get_ns();
     start.update(&pid, &ts);
     $DEBUG_PRINTK("=======================================================\n");
-    $DEBUG_PRINTK("Mapped tid [%d] to req [%d]\n", pid, req_id);
+    $DEBUG_PRINTK("Mapped tid [%d] to req [%$REQ_TYPE_FORMAT]\n", pid, req_id);
     $DEBUG_PRINTK("=======================================================\n");
 }
 
 void unmap_tid_to_rid(struct pt_regs *ctx) {
     u64 ts = bpf_ktime_get_ns();
     u32 pid = bpf_get_current_pid_tgid();
-    int *req_id = tid_to_rid.lookup(&pid);
+    $RID_TYPE *req_id = tid_to_rid.lookup(&pid);
     if (!req_id) {
         return;
     }
@@ -726,6 +725,45 @@ void unmap_tid_to_rid(struct pt_regs *ctx) {
     }*/
 
     $DEBUG_PRINTK("=======================================================\n");
-    $DEBUG_PRINTK("Unmapped tid [%d] from req [%d]\n", pid, *req_id);
+    $DEBUG_PRINTK("Unmapped tid [%d] from req [%$REQ_TYPE_FORMAT]\n", pid, *req_id);
     $DEBUG_PRINTK("=======================================================\n");
 }
+
+/****************************** DMTR request mappers *****************************/
+void dmtr_map_tid_to_iter(struct pt_regs *ctx) {
+    $RID_TYPE req_id;
+    bpf_probe_read(&req_id, sizeof(req_id), (void *)&PT_REGS_PARM$(dmtr_map_tid_to_iter)(ctx));
+    if (req_id == 0) {
+        return;
+    }
+    u32 pid = bpf_get_current_pid_tgid();
+    tid_to_rid.insert(&pid, &req_id);
+    u64 ts = bpf_ktime_get_ns();
+    start.update(&pid, &ts);
+    $DEBUG_PRINTK("=======================================================\n");
+    $DEBUG_PRINTK("Mapped tid [%d] to req [%$REQ_TYPE_FORMAT]\n", pid, req_id);
+    $DEBUG_PRINTK("=======================================================\n");
+}
+
+void dmtr_unmap_tid_to_iter(struct pt_regs *ctx) {
+    u64 ts = bpf_ktime_get_ns();
+    u32 pid = bpf_get_current_pid_tgid();
+    $RID_TYPE *req_id = tid_to_rid.lookup(&pid);
+    if (!req_id) {
+        return;
+    }
+    update_array(ctx, pid, ts, *req_id);
+    tid_to_rid.delete(&pid);
+
+    /*
+    int req_id_cp = *req_id;
+    struct datapoint *stored_dp = datapoints.lookup(&req_id_cp);
+    if (stored_dp) {
+        stored_dp->latest_ts_update = ts;
+    }*/
+
+    $DEBUG_PRINTK("=======================================================\n");
+    $DEBUG_PRINTK("Unmapped tid [%d] from req [%$REQ_TYPE_FORMAT]\n", pid, *req_id);
+    $DEBUG_PRINTK("=======================================================\n");
+}
+/****************************** DMTR request mappers *****************************/

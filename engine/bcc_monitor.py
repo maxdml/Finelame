@@ -138,16 +138,17 @@ class BCCMonitor():
             self.monitors.append(monitor)
 
     def attach_application_monitor(self, exec_path, cfg):
-        log_info("Application monitor on %s in %s", cfg['event'], exec_path)
         if 'in_fn_name' in cfg:
             monitor = Monitor(cfg['event'], cfg['in_fn_name'], False, exec_path=exec_path)
             monitor.attach(self.ebpf)
             self.monitors.append(monitor)
+        log_info("Attached application in-monitor on %s in %s", cfg['event'], exec_path)
 
         if 'ret_fn_name' in cfg:
             monitor = Monitor(cfg['event'], cfg['ret_fn_name'], True, exec_path=exec_path)
             monitor.attach(self.ebpf)
             self.monitors.append(monitor)
+        log_info("Attached application ret-monitor on %s in %s", cfg['event'], exec_path)
 
     def detach_all_monitors(self):
         for monitor in self.monitors:

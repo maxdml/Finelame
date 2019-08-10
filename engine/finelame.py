@@ -114,7 +114,8 @@ class Finelame():
         ''' Data collection params '''
         self.mode = 'train'
 
-        ebpf_prog = rewrite_ebpf(self.cfg['ebpf_prog'], self.FD, debug)
+        #XXX Finelame is made mostly for a single application as of now (hence the [0])
+        ebpf_prog = rewrite_ebpf(self.cfg['ebpf_prog'], self.cfg['applications'][0], self.FD, debug)
         self.BM = BM(ebpf_prog, self.cfg['request_stats'])
         self.resource_monitors = self.cfg['resource_monitors']
         self.applications = self.cfg['applications']

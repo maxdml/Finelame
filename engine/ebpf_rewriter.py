@@ -19,6 +19,7 @@ END OF LICENSE STUB
 '''
 
 import os
+import sys
 
 def sub_debug(src, debug):
     return src.replace("$DEBUG_PRINTK", "bpf_trace_printk" if debug else "IGNORE")
@@ -40,14 +41,38 @@ def sub_mscale(src, detector):
         src = src.replace("$MSCALE", "", 1)
     return src
 
+def sub_ridtype(src, application):
+    rid_type = application['rid_type'] if 'rid_type' in application else 'u32'
 
-def rewrite_ebpf(src_file, detector, debug, suffix="_rewritten"):
+    if rid_type == 'u32':
+        rid_printf = 'u'
+    elif rid_type == 'u64':
+        rid_printf = 'lu'
+    elif rid_type == 'int':
+        rid_printf = 'd'
+    else:
+        print("Non handled RID type (u32/u64/int)");
+        sys.exit()
+
+    src = src.replace('$RID_TYPE', str(rid_type))
+    src = src.replace('$REQ_TYPE_FORMAT', str(rid_printf))
+    return src
+
+def sub_rmp(src, rm):
+    rid_position = rm['rid_position'] if 'rid_position' in rm else '1'
+    rm_var = '$(' + rm['in_fn_name'] + ')'
+    return src.replace(rm_var, str(rid_position))
+
+def rewrite_ebpf(src_file, application, detector, debug, suffix="_rewritten"):
     with open(src_file) as f:
         src = f.read()
 
     src = sub_debug(src, debug)
     src = sub_k(src, detector)
     src = sub_mscale(src, detector)
+    src = sub_ridtype(src, application)
+    for rm in application['monitors']:
+        src = sub_rmp(src, rm)
 
     path, ext = os.path.splitext(src_file)
     dst_file = path+suffix+ext
