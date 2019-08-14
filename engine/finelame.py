@@ -118,6 +118,7 @@ class Finelame():
         ebpf_prog = rewrite_ebpf(self.cfg['ebpf_prog'], self.cfg['applications'][0], self.FD, debug)
         self.BM = BM(ebpf_prog, self.cfg['request_stats'])
         self.resource_monitors = self.cfg['resource_monitors']
+        self.hardware_monitors = self.cfg['hardware_monitors']
         self.applications = self.cfg['applications']
         self.start_ts = time.time() # in sec
         self.outlier_reports = list()
@@ -209,6 +210,9 @@ class Finelame():
         for monitor in self.resource_monitors:
             self.BM.attach_resource_monitor(monitor)
 
+        for monitor in self.hardware_monitors:
+            self.BM.attach_hardware_monitor(monitor)
+
         for application in self.applications:
             for monitor in application['monitors']:
                 self.BM.attach_application_monitor(application['exec_path'], monitor)
@@ -219,6 +223,12 @@ class Finelame():
         log_info('Stopping Finelame')
         self.BM.detach_all_monitors()
 
+        '''
+        #Check cache data
+        for v in self.BM.ebpf['datapoints'].values():
+            print("cputime: {}, cache misses: {}, cache refs: {}\n".format(
+                v.cputime, v.cache_misses, v.cache_refs))
+        '''
         #Dump training data to csv
         if self.FD.X_train is not None:
             fname = os.path.join(self.outdir, 'train_{}.csv'.format(self.run_label))

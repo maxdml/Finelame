@@ -22,6 +22,7 @@ END OF LICENSE STUB
 #include <linux/sched.h>
 #include <uapi/linux/bpf.h>
 #include <net/sock.h>
+#include <uapi/linux/bpf_perf_event.h>
 
 /**
  * Features order:
@@ -31,6 +32,8 @@ END OF LICENSE STUB
         - 'REQ_IDLE_TIME'
         - 'REQ_TCP_SENT'
         - 'REQ_TCP_RCVD'
+        - 'REQ_CACHE_MISSES'
+        - 'REQ_CACHE_REFS'
  */
 
 #define MAX_TIDS 32
@@ -53,6 +56,8 @@ struct datapoint {
     u64 first_ts;
     u32 saddr;
     int n_cputime_updates;
+    u32 cache_misses;
+    u32 cache_refs;
 };
 
 #define CPUTIME_OFFSET 0
@@ -61,6 +66,8 @@ struct datapoint {
 #define IDLE_TIME_OFFSET 3
 #define TCP_SENT_OFFSET 4
 #define TCP_RCVD_OFFSET 5
+#define CACHE_MISSES_OFFSET 6
+#define CACHE_REFS_OFFSET 7
 
 struct outlier_score {
     long long distances[K];
@@ -83,7 +90,7 @@ BPF_ARRAY(centroid_l1s, long long, K);
 BPF_ARRAY(centroid_offset, long long, 1);
 BPF_ARRAY(train_set_params, u64, N_FEATURES * 2); // Mean and std of each feature in the training set
 
-static inline long long normalize_datapoint(long long dp, int offset) {
+static inline __attribute__((always_inline)) long long normalize_datapoint(long long dp, int offset) {
     //$DEBUG_PRINTK("to normalize dp: %lld\n", dp);
     if (dp == 0) {
         return 0;
@@ -120,13 +127,14 @@ static inline long long normalize_datapoint(long long dp, int offset) {
     return scaled;
 }
 
-static inline int centroids_defined() {
+static inline __attribute__((always_inline)) int centroids_defined() {
     int idx = 0;
     long long *k0_l1 = centroid_l1s.lookup(&idx);
     return k0_l1 && *k0_l1;
 }
 
-static inline int update_outlier_score(struct pt_regs *ctx, $RID_TYPE req_id, long long delta, u64 ts, u64 cputime) {
+static inline __attribute__((always_inline))
+int update_outlier_score($RID_TYPE req_id, long long delta, u64 ts, u64 cputime) {
     //$DEBUG_PRINTK("Delta is %lld\n", delta);
     struct outlier_score *out = outlier_scores_m.lookup(&req_id);
     if (!out) {
@@ -204,7 +212,8 @@ static struct datapoint * lookup_or_init_dp($RID_TYPE req_id, u64 ts) {
     return datapoints.lookup_or_init(&req_id, &new_dp);
 }
 
-static inline int update_array(struct pt_regs *ctx, u32 pid, u64 ts, $RID_TYPE req_id) {
+static inline __attribute__((always_inline))
+int update_array(struct pt_regs *ctx, u32 pid, u64 ts, $RID_TYPE req_id) {
     u64 *tsp = start.lookup(&pid);
     if (tsp == 0) {
         return -1;
@@ -228,7 +237,7 @@ static inline int update_array(struct pt_regs *ctx, u32 pid, u64 ts, $RID_TYPE r
     $DEBUG_PRINTK("RID [%$REQ_TYPE_FORMAT]: CPUTIME: %lld\n", req_id, dp->cputime);
     if (centroids_defined()) {
         long long delta_scaled = normalize_datapoint(delta, CPUTIME_OFFSET);
-        update_outlier_score(ctx, req_id, delta_scaled, ts, dp->cputime);
+        update_outlier_score(req_id, delta_scaled, ts, dp->cputime);
     }
     return 0;
 }
@@ -281,7 +290,7 @@ int handle_pg_fault(struct pt_regs *ctx) {
     $DEBUG_PRINTK("RID: [%$REQ_TYPE_FORMAT] PGFAULTS: %d\n", *req_id, dp->pgfaults);
     if (centroids_defined()) {
         long long delta = normalize_datapoint(1, PGFAULT_OFFSET);
-        update_outlier_score(ctx, *req_id, delta, ts, dp->cputime);
+        update_outlier_score(*req_id, delta, ts, dp->cputime);
     }
     return 0;
 }
@@ -308,7 +317,7 @@ int ap_probe_malloc(struct pt_regs *ctx) {
     $DEBUG_PRINTK("RID: [%$REQ_TYPE_FORMAT] MALLOC: %d\n", req_id, dp->mem_malloc);
     if (centroids_defined()) {
         long long delta = normalize_datapoint(malloc_size, MALLOC_OFFSET);
-        update_outlier_score(ctx, req_id, delta, ts, dp->cputime);
+        update_outlier_score(req_id, delta, ts, dp->cputime);
     }
     return 0;
 };
@@ -333,7 +342,7 @@ int probe_realloc(struct pt_regs *ctx) {
     $DEBUG_PRINTK("RID: [%$REQ_TYPE_FORMAT] MEM_MALLOC: %d\n", *req_id, dp->mem_malloc);
     if (centroids_defined()) {
         long long delta = normalize_datapoint(malloc_size, MALLOC_OFFSET);
-        update_outlier_score(ctx, *req_id, delta, ts, dp->cputime);
+        update_outlier_score(*req_id, delta, ts, dp->cputime);
     }
     return 0;
 };
@@ -358,7 +367,7 @@ int probe_malloc(struct pt_regs *ctx) {
     $DEBUG_PRINTK("RID: [%$REQ_TYPE_FORMAT] MEM_MALLOC: %d\n", *req_id, dp->mem_malloc);
     if (centroids_defined()) {
         long long delta = normalize_datapoint(malloc_size, MALLOC_OFFSET);
-        update_outlier_score(ctx, *req_id, delta, ts, dp->cputime);
+        update_outlier_score(*req_id, delta, ts, dp->cputime);
     }
     return 0;
 };
@@ -383,7 +392,7 @@ int probe_tcp_sendmsg(struct pt_regs *ctx, struct sock *sk, struct msghdr *hdr, 
     $DEBUG_PRINTK("RID: [%$REQ_TYPE_FORMAT] MEM_MALLOC: %d\n", req_id, dp->tcp_sent);
     if (centroids_defined()) {
         long long delta = normalize_datapoint(size, TCP_SENT_OFFSET);
-        update_outlier_score(ctx, req_id, delta, ts, dp->cputime);
+        update_outlier_score(req_id, delta, ts, dp->cputime);
     }
     return 0;
 }
@@ -426,14 +435,60 @@ int probe_tcp_cleanup_rbuf(struct pt_regs *ctx, struct sock *sk, int copied) {
             if (idle_time > 1000000000) {
                 bpf_trace_printk("idle time was greater than 1s: %s\n", idle_time);
                 long long delta = 1000000000000000;
-                update_outlier_score(ctx, *req_id, delta, ts, dp->cputime);
+                update_outlier_score(*req_id, delta, ts, dp->cputime);
             } else {
                 long long delta = normalize_datapoint(idle_time, IDLE_TIME_OFFSET);
-                update_outlier_score(ctx, *req_id, delta, ts, dp->cputime);
+                update_outlier_score(*req_id, delta, ts, dp->cputime);
             }
         }
         long long delta = normalize_datapoint(copied, TCP_RCVD_OFFSET);
-        update_outlier_score(ctx, *req_id, delta, ts, dp->cputime);
+        update_outlier_score(*req_id, delta, ts, dp->cputime);
+    }
+    return 0;
+}
+
+int probe_cache_miss(struct bpf_perf_event_data *ctx) {
+    bpf_trace_printk("cache miss\n!");
+    u32 pid = bpf_get_current_pid_tgid();
+    $RID_TYPE *req_id = tid_to_rid.lookup(&pid);
+    if (!req_id) {
+        return 0;
+    }
+
+    u64 ts = bpf_ktime_get_ns();
+    struct datapoint *dp = lookup_or_init_dp(*req_id, ts);
+    if (!dp) {
+        return 0;
+    }
+    dp->cache_misses += ctx->sample_period;
+
+    $DEBUG_PRINTK("RID: [%$REQ_TYPE_FORMAT] CACHE_MISSES: %d\n", *req_id, dp->cache_misses);
+    if (centroids_defined()) {
+        long long delta = normalize_datapoint(ctx->sample_period, CACHE_MISSES_OFFSET);
+        update_outlier_score(*req_id, delta, ts, dp->cputime);
+    }
+    return 0;
+}
+
+int probe_cache_ref(struct bpf_perf_event_data *ctx) {
+    bpf_trace_printk("cache ref\n!");
+    u32 pid = bpf_get_current_pid_tgid();
+    $RID_TYPE *req_id = tid_to_rid.lookup(&pid);
+    if (!req_id) {
+        return 0;
+    }
+
+    u64 ts = bpf_ktime_get_ns();
+    struct datapoint *dp = lookup_or_init_dp(*req_id, ts);
+    if (!dp) {
+        return 0;
+    }
+    dp->cache_refs += ctx->sample_period;
+
+    $DEBUG_PRINTK("RID: [%$REQ_TYPE_FORMAT] CACHE_REFS: %d\n", *req_id, dp->cache_refs);
+    if (centroids_defined()) {
+        long long delta = normalize_datapoint(ctx->sample_period, CACHE_REFS_OFFSET);
+        update_outlier_score(*req_id, delta, ts, dp->cputime);
     }
     return 0;
 }

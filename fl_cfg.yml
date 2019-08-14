@@ -22,9 +22,9 @@ model_params:
         - 'REQ_CPUTIME'
         - 'REQ_MEM_MALLOC'
         - 'REQ_PGFLT'
-        - 'REQ_IDLE_TIME'
-        - 'REQ_TCP_SENT'
-        - 'REQ_TCP_RCVD'
+#        - 'REQ_IDLE_TIME'
+#        - 'REQ_TCP_SENT'
+#        - 'REQ_TCP_RCVD'
 
 request_stats:
     REQ_CPUTIME:
@@ -54,6 +54,14 @@ request_stats:
 #    in_fn_name: 'ap_probe_malloc'
 #    type: 'p'
 #    side: 'u'
+
+hardware_monitors:
+    - event: 'CACHE_MISSES'
+      fn_name: 'probe_cache_miss'
+      sample_period: '1'
+    - event: 'CACHE_REFERENCES'
+      fn_name: 'probe_cache_ref'
+      sample_period: '1'
 
 resource_monitors:
     - event: 'finish_task_switch'
@@ -133,10 +141,23 @@ ebpf_prog: '/scratch/finelame_ebpf.c'
 #        in_fn_name: 'map_tid_to_rid_1'
 #        ret_fn_name: 'unmap_tid_to_rid'
 
-dmtr_application: &DMTR_APP_NOSPLIT
+dmtr_app_nosplit: &DMTR_APP_NOSPLIT
     exec_path: '/u/maxdml/datacenter-OS/build/dpdk/src/c++/apps/echo/dmtr-lwip-http-server-threaded'
     monitors:
-        - event: '_Z8tcp_workmRSt6vectorIiSaIiEERS_IbSaIbEERiRS_ImSaImEERmP12parser_stateP6WorkerS6_'
+        - event: '_Z8tcp_workmRSt6vectorIiSaIiEERS_IbSaIbEER12dmtr_qresultRiRS_ImSaImEERmP12parser_stateP6Workeri'
+          in_fn_name: 'dmtr_map_tid_to_iter'
+          ret_fn_name: 'dmtr_unmap_tid_to_iter'
+          rid_position: 1
+    rid_type: 'u64'
+
+dmtr_app_split: &DMTR_APP_SPLIT
+    exec_path: '/u/maxdml/datacenter-OS/build/dpdk/src/c++/apps/echo/dmtr-lwip-http-server-threaded'
+    monitors:
+        - event: '_Z8tcp_workmRSt6vectorIiSaIiEERS_IbSaIbEER12dmtr_qresultRiRS_ImSaImEERmP12parser_stateP6Workeri'
+          in_fn_name: 'dmtr_map_tid_to_iter'
+          ret_fn_name: 'dmtr_unmap_tid_to_iter'
+          rid_position: 1
+        - event: '_Z9http_workmP12parser_stateR12dmtr_qresultRmiP6Worker'
           in_fn_name: 'dmtr_map_tid_to_iter'
           ret_fn_name: 'dmtr_unmap_tid_to_iter'
           rid_position: 1
@@ -146,6 +167,7 @@ dmtr_application: &DMTR_APP_NOSPLIT
 applications:
 #    - *DEDOS_APP
 #    - *NODEJS_APP
-    - *DMTR_APP_NOSPLIT
+#    - *DMTR_APP_NOSPLIT
+    - *DMTR_APP_SPLIT
 
 train_time: 200
