@@ -63,13 +63,14 @@ def sub_rmp(src, rm):
     rm_var = '$(' + rm['in_fn_name'] + ')'
     return src.replace(rm_var, str(rid_position))
 
-def rewrite_ebpf(src_file, application, detector, debug, suffix="_rewritten"):
+def rewrite_ebpf(src_file, application, debug, detector=None, suffix="_rewritten"):
     with open(src_file) as f:
         src = f.read()
 
     src = sub_debug(src, debug)
-    src = sub_k(src, detector)
-    src = sub_mscale(src, detector)
+    if detector is not None:
+        src = sub_k(src, detector)
+        src = sub_mscale(src, detector)
     src = sub_ridtype(src, application)
     for rm in application['monitors']:
         src = sub_rmp(src, rm)

@@ -50,6 +50,7 @@ class FinelameDetector():
     DEFAULT_S_SCALE = 6
 
     def __init__(self, model_params):
+        log_info("Configuring Finelame anomaly detector")
         if 'k' not in model_params or 'features' not in model_params:
             raise Exception('FinelameDetector needs features description and model params (k for kmeans)')
         self.outlier_scores = dict()
@@ -91,7 +92,8 @@ class FinelameDetector():
         log_info('Trained KMeans model')
 
 class Finelame():
-    def __init__(self, cfg_file, run_label, outdir, train_time = None, debug=False):
+    def __init__(self, cfg_file, run_label, outdir,
+                 train_time=None, debug=False, ano_detect=False):
         self.outdir = outdir
         if not os.path.isdir(outdir):
             os.makedirs(outdir)
@@ -100,30 +102,46 @@ class Finelame():
         with open(cfg_file, 'r') as f:
             self.cfg = yaml.load(f)
         self.run_label = run_label
-        ''' Anomaly detector params '''
-        self.FD = FinelameDetector(model_params=self.cfg['model_params'])
 
-        if train_time is not None and 'train_time' in self.cfg:
-            log_warn("Warning: Ignoring config train time in favor of argument")
-            self.train_time = train_time
-        else:
-            self.train_time = self.cfg.get('train_time', train_time)
-        log_info("Setting train time to %d", self.train_time)
+        self.FD = None
+        self.train_time = None
+        if ano_detect:
+            ''' Anomaly detector params '''
+            self.FD = FinelameDetector(model_params=self.cfg['model_params'])
 
-        self.is_running = False
+            if train_time is not None and 'train_time' in self.cfg:
+                log_warn("Warning: Ignoring config train time in favor of argument")
+                self.train_time = train_time
+            else:
+                self.train_time = self.cfg.get('train_time', train_time)
+            log_info("Setting train time to %d", self.train_time)
+            self.mode = 'train'
+        self.mode = 'monitoring'
+
         ''' Data collection params '''
-        self.mode = 'train'
-
         #XXX Finelame is made mostly for a single application as of now (hence the [0])
-        ebpf_prog = rewrite_ebpf(self.cfg['ebpf_prog'], self.cfg['applications'][0], self.FD, debug)
+        ebpf_prog = rewrite_ebpf(self.cfg['ebpf_prog'], self.cfg['applications'][0], debug, detector=self.FD)
         self.BM = BM(ebpf_prog, self.cfg['request_stats'])
-        self.resource_monitors = self.cfg['resource_monitors']
-        self.hardware_monitors = self.cfg['hardware_monitors']
+
+        self.resource_monitors = {}
+        if 'resource_monitors' in self.cfg:
+            self.resource_monitors = self.cfg['resource_monitors']
+        self.hardware_monitors = {}
+        if 'hardware_monitors' in self.cfg:
+            self.hardware_monitors = self.cfg['hardware_monitors']
+        if 'resource_monitors' not in self.cfg \
+           and \
+           'hardware_monitors' in self.cfg:
+            log_error("Finelame needs events to monitor")
+            sys.exit()
+
         self.applications = self.cfg['applications']
         self.start_ts = time.time() # in sec
         self.outlier_reports = list()
+
         ''' Register SIGINT handler '''
         signal.signal(signal.SIGINT, self._stop)
+        self.is_running = False
 
     def _train_and_share_model(self):
         log_info('Training and sharing the model...')
@@ -142,7 +160,6 @@ class Finelame():
             self.BM.ebpf['train_set_params'][i*2+1] = ct.c_ulonglong(int(std))
 
         c_scale = self.FD.m_scale / self.FD.s_scale
-
 
         #Train kmeans
         self.FD.train_model(x_train=X_train)
@@ -177,7 +194,8 @@ class Finelame():
     Periodically pull data from eBPF map
     '''
     def _loop_iteration(self):
-        if time.time() - self.start_ts > self.train_time and self.mode == 'train':
+        if self.mode == 'train' \
+           and time.time() - self.start_ts > self.train_time:
 
             self.mode = 'detection'
             x_train = self.BM.get_request_stats()
@@ -229,13 +247,23 @@ class Finelame():
             print("cputime: {}, cache misses: {}, cache refs: {}\n".format(
                 v.cputime, v.cache_misses, v.cache_refs))
         '''
-        #Dump training data to csv
-        if self.FD.X_train is not None:
-            fname = os.path.join(self.outdir, 'train_{}.csv'.format(self.run_label))
-            log_info('Dumping train data into {}...'.format(fname))
-            self.FD.X_train.to_csv(fname, index=False)
 
-        #Everything else is considered testing data
+        #Retrieve request data if we are in monitoring mode only
+        if self.mode == 'monitoring':
+            data = self.BM.get_request_stats()
+            if data.empty:
+                log_info('Did not record any data. Resetting timer')
+            #XXX dump those data to file
+
+        # We might have training data if we are in either of those modes
+        if self.mode == 'train' or self.mode == 'detection':
+            #Dump training data to csv
+            if self.FD.X_train is not None:
+                fname = os.path.join(self.outdir, 'train_{}.csv'.format(self.run_label))
+                log_info('Dumping train data into {}...'.format(fname))
+                self.FD.X_train.to_csv(fname, index=False)
+
+        #If we are in detection mode, we might have some AD data
         if self.mode == 'detection':
             record_start = time.time()
             log_info('Gathering test datapoints...')

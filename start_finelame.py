@@ -1,3 +1,4 @@
+#!/usr/bin/python
 '''
 START OF LICENSE STUB
     FineLame: Detecting Application-Layer Denial-of-Service Attacks
@@ -29,6 +30,7 @@ if __name__ == '__main__':
     parser.add_argument('--out', default='.', help='Output directory')
     parser.add_argument('--train-time', default=None, type=float, help='Number of seconds to train')
     parser.add_argument('--debug', action="store_true",  default=False, help='Turn on /sys/kernel/debug/tracing/trace_pipe debugging')
+    parser.add_argument('--ano-detect', action="store_true",  default=False, help='Perform anomaly detection')
     args = parser.parse_args()
 
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -38,5 +40,6 @@ if __name__ == '__main__':
                   run_label=args.run_label,
                   outdir=args.out,
                   train_time = args.train_time,
-                  debug=args.debug)
+                  debug=args.debug,
+                  ano_detect = args.ano_detect)
     FL.start()
