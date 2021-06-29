@@ -1,7 +1,7 @@
 Finelame is a language-independent framework for detecting asymmetric DoS attacks.
 It leverages operating system visibility across the entire software stack to instrument key resource allocation and negotiation points.
 Finelame leverage eBPF, and its current user-space agent is implemented in python used BCC.
-[Finelame's paper](url goes here) was published in the proceedings of ATC 2019.
+[Finelame's paper](https://www.usenix.org/system/files/atc19-demoulin_0.pdf) was published in the proceedings of ATC 2019.
 
 # Dependencies
 The system requires the [BCC tools from iovisor](https://github.com/iovisor/bcc/blob/master/INSTALL.md)
